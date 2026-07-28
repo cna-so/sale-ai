@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -19,6 +20,18 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 32
 
 
+def _deterministic_point_id(document_id: str, chunk_index: int) -> str:
+    """Derive a stable UUID-shaped string from (document_id, chunk_index).
+
+    Using a deterministic ID means re-indexing the same file upserts
+    (overwrites) existing vectors instead of creating duplicates.
+    """
+    raw = f"{document_id}:{chunk_index}"
+    digest = hashlib.md5(raw.encode()).hexdigest()
+    # Format as UUID for Qdrant compatibility: 8-4-4-4-12
+    return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
+
+
 class IndexingService:
     def __init__(
         self,
@@ -36,7 +49,11 @@ class IndexingService:
         collection: str | None = None,
         document_id: str | None = None,
     ) -> dict:
-        """Load, chunk, embed and upsert a file into Qdrant."""
+        """Load, chunk, embed and upsert a file into Qdrant.
+
+        Re-indexing the same file is safe: deterministic point IDs ensure that
+        ``upsert`` overwrites existing vectors rather than creating duplicates.
+        """
         path = Path(file_path)
         collection = collection or self._settings.qdrant_collection
         doc_id = document_id or new_id()
@@ -68,7 +85,7 @@ class IndexingService:
 
             points = [
                 PointStruct(
-                    id=new_id(),
+                    id=_deterministic_point_id(chunk.document_id, chunk.chunk_index),
                     vector=vec,
                     payload={
                         "content": chunk.content,

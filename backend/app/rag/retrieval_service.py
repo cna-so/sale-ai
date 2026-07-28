@@ -28,10 +28,17 @@ class RetrievalService:
         query: str,
         top_k: int | None = None,
         collection: str | None = None,
+        score_threshold: float | None = None,
     ) -> list[RetrievedDocument]:
-        """Embed query and retrieve the top-k most similar chunks."""
+        """Embed *query* and return the top-k most similar chunks.
+
+        Chunks whose cosine similarity is below *score_threshold* (defaults to
+        ``settings.rag_score_threshold``) are discarded so the LLM never
+        receives irrelevant context.
+        """
         top_k = top_k or self._settings.rag_top_k
         collection = collection or self._settings.qdrant_collection
+        threshold = score_threshold if score_threshold is not None else self._settings.rag_score_threshold
 
         try:
             query_vector = await self._embedding.embed_one(query)
@@ -40,6 +47,7 @@ class RetrievalService:
                 query_vector=query_vector,
                 limit=top_k,
                 with_payload=True,
+                score_threshold=threshold,
             )
         except Exception as exc:
             logger.error("Retrieval failed: %s", exc)

@@ -25,11 +25,15 @@ class Settings(BaseSettings):
     openrouter_chat_model: str = "openai/gpt-4o-mini"
     openrouter_vision_model: str = "openai/gpt-4o"
     openrouter_embedding_model: str = "openai/text-embedding-3-small"
+    # Dimension for text-embedding-3-small. Update here if you switch models.
+    embedding_dimension: int = 1536
 
     # Qdrant
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     qdrant_collection: str = "shopping_assistant_documents"
+    # Minimum cosine similarity to include a retrieved chunk (0-1 range).
+    rag_score_threshold: float = 0.55
 
     # Product provider
     product_provider: Literal["mock", "digikala"] = "mock"
@@ -45,6 +49,8 @@ class Settings(BaseSettings):
 
     # Conversation
     chat_history_limit: int = 12
+    # Maximum number of conversations kept in memory (LRU eviction above this).
+    conversation_memory_cap: int = 1000
 
     # Locale
     default_locale: str = "fa-IR"

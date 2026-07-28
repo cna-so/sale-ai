@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -10,6 +11,8 @@ from backend.app.models.domain import IntentFilters, IntentResult, PriceFilter
 from backend.app.prompts.intent import INTENT_SYSTEM_PROMPT_EN, INTENT_SYSTEM_PROMPT_FA
 from backend.app.services.llm_service import LLMService
 from backend.app.utils.language import detect_language, parse_price_constraints
+
+logger = logging.getLogger(__name__)
 
 
 class IntentService:
@@ -33,8 +36,13 @@ class IntentService:
                 )
                 parsed = json.loads(content)
                 return IntentResult.model_validate(parsed)
-            except Exception:
-                pass
+            except (json.JSONDecodeError, ValidationError) as exc:
+                # LLM returned malformed JSON or a schema mismatch — fall back
+                # to keyword detection. This is expected occasionally.
+                logger.warning("LLM intent parse failed (%s), using keyword fallback", exc)
+            except Exception as exc:
+                # Network / API errors — always log so failures are traceable.
+                logger.warning("LLM intent call failed: %s", exc)
 
         return self._fallback_detect(message, language, conversation_messages or [])
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from urllib.parse import quote_plus, urljoin
 
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Browser, TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from backend.app.core.config import Settings
@@ -13,29 +13,88 @@ from backend.app.utils.ids import new_id
 
 logger = logging.getLogger(__name__)
 
+# User-agent used for all Playwright requests. Keep it realistic.
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
 
 class DigikalaPlaywrightProvider(ProductProvider):
+    """Playwright-based scraper for Digikala product search.
+
+    A single Chromium browser instance is shared across all calls (pool of
+    one) so the expensive launch only happens once — on the first search —
+    and is reused for subsequent requests.  Call :meth:`aclose` (or use the
+    FastAPI lifespan) to shut the browser down cleanly.
+    """
+
     name = "digikala"
     BASE_URL = "https://www.digikala.com"
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._playwright = None
+        self._browser: Browser | None = None
+
+    async def _get_browser(self) -> Browser:
+        """Return the shared browser, launching it on first call."""
+        if self._browser is None or not self._browser.is_connected():
+            logger.info("Launching Playwright Chromium browser")
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+        return self._browser
+
+    async def aclose(self) -> None:
+        """Shut down the shared browser and Playwright runtime."""
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception as exc:
+                logger.warning("Error closing Playwright browser: %s", exc)
+            finally:
+                self._browser = None
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                logger.warning("Error stopping Playwright: %s", exc)
+            finally:
+                self._playwright = None
 
     async def search(self, query: str, max_results: int = 5) -> ProductSearchResult:
         search_url = f"{self.BASE_URL}/search/?q={quote_plus(query)}"
         products: list[Product] = []
 
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(search_url, timeout=self._settings.product_search_timeout_seconds * 1000)
-                await page.wait_for_timeout(2500)
+            browser = await self._get_browser()
+            page = await browser.new_page(user_agent=_USER_AGENT)
+            try:
+                await page.goto(
+                    search_url,
+                    timeout=self._settings.product_search_timeout_seconds * 1000,
+                )
+                # Wait for actual product cards to appear instead of a fixed sleep.
+                # Falls back gracefully if no products are rendered.
+                try:
+                    await page.wait_for_selector(
+                        "a[href*='/product/']",
+                        timeout=8_000,
+                    )
+                except PlaywrightTimeoutError:
+                    logger.warning("No product cards appeared for query='%s'", query)
+                    return ProductSearchResult(
+                        products=[], query=query, provider=self.name, total_found=0, error="no_results"
+                    )
 
                 # NOTE:
                 # Digikala's public product card markup may change over time.
-                # These selectors intentionally target common public listing structures
-                # and should be revisited if Digikala updates its HTML.
+                # These selectors intentionally target common public listing
+                # structures and should be revisited if Digikala updates its HTML.
                 cards = await page.query_selector_all("a[href*='/product/']")
                 seen_urls: set[str] = set()
 
@@ -59,7 +118,11 @@ class DigikalaPlaywrightProvider(ProductProvider):
                     img = await card.query_selector("img")
                     image_url = ""
                     if img is not None:
-                        image_url = (await img.get_attribute("src")) or (await img.get_attribute("data-src")) or ""
+                        image_url = (
+                            (await img.get_attribute("src"))
+                            or (await img.get_attribute("data-src"))
+                            or ""
+                        )
 
                     price = self._extract_price_toman(text)
                     rating = self._extract_rating(text)
@@ -79,16 +142,24 @@ class DigikalaPlaywrightProvider(ProductProvider):
                             source="digikala",
                         )
                     )
+            finally:
+                # Always close the page; the browser itself is kept alive for reuse.
+                await page.close()
 
-                await browser.close()
         except PlaywrightTimeoutError:
             logger.warning("Digikala search timed out for query='%s'", query)
-            return ProductSearchResult(products=[], query=query, provider=self.name, total_found=0, error="timeout")
+            return ProductSearchResult(
+                products=[], query=query, provider=self.name, total_found=0, error="timeout"
+            )
         except Exception as exc:
             logger.warning("Digikala provider failed: %s", exc)
-            return ProductSearchResult(products=[], query=query, provider=self.name, total_found=0, error=str(exc))
+            return ProductSearchResult(
+                products=[], query=query, provider=self.name, total_found=0, error=str(exc)
+            )
 
-        return ProductSearchResult(products=products, query=query, provider=self.name, total_found=len(products))
+        return ProductSearchResult(
+            products=products, query=query, provider=self.name, total_found=len(products)
+        )
 
     @staticmethod
     def _extract_price_toman(text: str) -> int:

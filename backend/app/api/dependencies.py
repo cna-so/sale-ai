@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
@@ -28,17 +27,21 @@ from backend.app.vectorstore.qdrant_client import get_qdrant_client
 # ---------------------------------------------------------------------------
 # Module-level singletons (process-wide)
 # ---------------------------------------------------------------------------
+# These are intentionally kept outside of FastAPI's dependency system so each
+# request does NOT re-instantiate expensive objects (HTTP clients, browser, etc.).
+# The FastAPI lifespan hook is responsible for calling aclose() on shutdown.
 
 _repo: InMemoryConversationRepository | None = None
 _llm: LLMService | None = None
 _embedding: EmbeddingService | None = None
+_digikala_provider: DigikalaPlaywrightProvider | None = None
 _agent: ShoppingAgent | None = None
 
 
 def get_conversation_repository(settings: Settings = Depends(get_settings)) -> ConversationRepository:
     global _repo
     if _repo is None:
-        _repo = InMemoryConversationRepository()
+        _repo = InMemoryConversationRepository(max_size=settings.conversation_memory_cap)
     return _repo
 
 
@@ -57,8 +60,12 @@ def get_embedding_service(settings: Settings = Depends(get_settings)) -> Embeddi
 
 
 def get_product_provider(settings: Settings = Depends(get_settings)) -> ProductProvider:
+    global _digikala_provider
     if settings.product_provider == "digikala":
-        return DigikalaPlaywrightProvider(settings)
+        # Reuse the same provider so the Playwright browser is shared.
+        if _digikala_provider is None:
+            _digikala_provider = DigikalaPlaywrightProvider(settings)
+        return _digikala_provider
     return MockProductProvider()
 
 
@@ -121,14 +128,48 @@ def get_shopping_agent(
     llm: LLMService = Depends(get_llm_service),
     rec: RecommendationService = Depends(get_recommendation_service),
 ) -> ShoppingAgent:
-    graph = build_shopping_graph(
-        repository=repo,
-        settings=settings,
-        intent_service=intent,
-        rag_tool=rag_tool,
-        product_tool=product_tool,
-        image_tool=image_tool,
-        llm_service=llm,
-        recommendation_service=rec,
-    )
-    return ShoppingAgent(graph)
+    """Return the process-wide ShoppingAgent singleton.
+
+    The LangGraph graph is expensive to build (it wires together all services).
+    It is built once and reused across requests via the module-level ``_agent``
+    variable.  Previously this function rebuilt the graph on every request,
+    wasting CPU and defeating the purpose of the singleton services.
+    """
+    global _agent
+    if _agent is None:
+        graph = build_shopping_graph(
+            repository=repo,
+            settings=settings,
+            intent_service=intent,
+            rag_tool=rag_tool,
+            product_tool=product_tool,
+            image_tool=image_tool,
+            llm_service=llm,
+            recommendation_service=rec,
+        )
+        _agent = ShoppingAgent(graph)
+    return _agent
+
+
+async def close_singletons() -> None:
+    """Gracefully shut down all long-lived resources.
+
+    Call this from the FastAPI lifespan ``shutdown`` hook::
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            yield
+            await close_singletons()
+    """
+    global _llm, _embedding, _digikala_provider, _agent, _repo
+    if _llm is not None:
+        await _llm.aclose()
+        _llm = None
+    if _embedding is not None:
+        await _embedding.aclose()
+        _embedding = None
+    if _digikala_provider is not None:
+        await _digikala_provider.aclose()
+        _digikala_provider = None
+    _agent = None
+    _repo = None
