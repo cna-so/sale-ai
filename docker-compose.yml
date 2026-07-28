@@ -2,13 +2,17 @@ version: '3.9'
 
 services:
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
       - QDRANT_HOST=qdrant
+      # Increase pip/httpx timeout for slow networks
+      - PIP_DEFAULT_TIMEOUT=120
     volumes:
       # Mount source for live-reload in dev
       - ./backend:/app/backend
@@ -17,6 +21,8 @@ services:
       qdrant:
         condition: service_healthy
     restart: unless-stopped
+    # Increase stop grace period
+    stop_grace_period: 10s
 
   qdrant:
     image: qdrant/qdrant:v1.12.4
