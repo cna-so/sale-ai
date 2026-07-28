@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from backend.app.core.exceptions import LLMError
+from backend.app.graph.state import AgentState
+from backend.app.models.domain import Product, RetrievedDocument
+from backend.app.prompts.response import RESPONSE_SYSTEM_PROMPT_EN, RESPONSE_SYSTEM_PROMPT_FA
+from backend.app.schemas.widgets import (
+    ComparisonTableData,
+    ComparisonTableWidget,
+    ProductCarouselData,
+    ProductCarouselWidget,
+    ProductCardData,
+    ProductCardWidget,
+)
+from backend.app.services.llm_service import LLMService
+from backend.app.services.recommendation_service import RecommendationService
+from backend.app.utils.language import format_price_toman
+
+logger = logging.getLogger(__name__)
+
+
+def _build_rag_context(docs: list[RetrievedDocument]) -> str:
+    if not docs:
+        return ""
+    parts = [f"[{i+1}] ({d.source}) {d.content}" for i, d in enumerate(docs)]
+    return "\n\n".join(parts)
+
+
+def _build_product_context(products: list[Product], language: str) -> str:
+    if not products:
+        return ""
+    lines = []
+    for i, p in enumerate(products):
+        price_str = format_price_toman(p.price) if p.price else "-"
+        lines.append(f"{i+1}. {p.title} | {price_str} | \u0627\u0645\u062a\u06cc\u0627\u0632: {p.rating}")
+    return "\n".join(lines)
+
+
+def _build_widgets(intent: str, products: list[Product], language: str) -> list[Any]:
+    if not products:
+        return []
+
+    if intent == "recommendation" and len(products) >= 3:
+        title = "\u0645\u062d\u0635\u0648\u0644\u0627\u062a \u067e\u06cc\u0634\u0646\u0647\u0627\u062f\u06cc" if language == "fa" else "Recommended Products"
+        columns_fa = ["\u0645\u062d\u0635\u0648\u0644", "\u0642\u06cc\u0645\u062a", "\u0627\u0645\u062a\u06cc\u0627\u0632"]
+        columns_en = ["Product", "Price", "Rating"]
+        columns = columns_fa if language == "fa" else columns_en
+        rows = [
+            [p.title, format_price_toman(p.price) if p.price else "-", str(p.rating)]
+            for p in products
+        ]
+        return [ComparisonTableWidget(data=ComparisonTableData(title=title, columns=columns, rows=rows))]
+
+    if len(products) == 1:
+        return [ProductCardWidget(data=ProductCardData(product=products[0]))]
+
+    carousel_title = "\u0646\u062a\u0627\u06cc\u062c \u062c\u0633\u062a\u062c\u0648" if language == "fa" else "Search Results"
+    return [ProductCarouselWidget(data=ProductCarouselData(title=carousel_title, products=products))]
+
+
+def make_generate_response_node(llm_service: LLMService, recommendation_service: RecommendationService):
+    async def generate_response(state: AgentState) -> AgentState:
+        intent_result = state.get("intent")
+        intent_label = intent_result.intent if intent_result else "general_chat"
+        language = intent_result.detected_language if intent_result else "fa"
+        products = state.get("products", [])
+        retrieved_docs = state.get("retrieved_docs", [])
+        image_analysis = state.get("image_analysis")
+        user_message = state["user_message"]
+        history = state.get("history", [])
+        preferences = state.get("preferences")
+
+        # Apply recommendation ranking when intent is recommendation
+        if intent_label == "recommendation" and products:
+            min_t = intent_result.filters.price.min_toman if intent_result else None
+            max_t = intent_result.filters.price.max_toman if intent_result else None
+            recommendations = recommendation_service.recommend(
+                query=user_message,
+                products=products,
+                language=language,
+                min_toman=min_t,
+                max_toman=max_t,
+            )
+            products = [r.product for r in recommendations]
+
+        system_prompt = RESPONSE_SYSTEM_PROMPT_FA if language == "fa" else RESPONSE_SYSTEM_PROMPT_EN
+
+        context_parts: list[str] = []
+        if retrieved_docs:
+            context_parts.append("---\n" + _build_rag_context(retrieved_docs) + "\n---")
+        if products:
+            label = "\u0645\u062d\u0635\u0648\u0644\u0627\u062a \u06cc\u0627\u0641\u062a \u0634\u062f\u0647" if language == "fa" else "Found products"
+            context_parts.append(f"{label}:\n" + _build_product_context(products, language))
+        if image_analysis:
+            img_label = "\u062a\u062d\u0644\u06cc\u0644 \u062a\u0635\u0648\u06cc\u0631" if language == "fa" else "Image analysis"
+            context_parts.append(f"{img_label}: {image_analysis.concise_description} | Query: {image_analysis.suggested_search_query}")
+
+        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+
+        # Include last few history turns for context
+        for msg in history[-4:]:
+            messages.append({"role": msg.role, "content": msg.content})
+
+        user_content = user_message
+        if context_parts:
+            user_content = "\n\n".join(context_parts) + "\n\n" + user_message
+
+        messages.append({"role": "user", "content": user_content})
+
+        try:
+            answer = await llm_service.chat(messages=messages, temperature=0.3)
+        except LLMError as exc:
+            logger.warning("LLM generation failed: %s", exc)
+            if language == "fa":
+                answer = "\u0645\u062a\u0623\u0633\u0641\u0627\u0646\u0647 \u062f\u0631 \u062d\u0627\u0644 \u062d\u0627\u0636\u0631 \u0642\u0627\u062f\u0631 \u0628\u0647 \u067e\u0627\u0633\u062e\u062f\u0647\u06cc \u0646\u06cc\u0633\u062a\u0645. \u0644\u0637\u0641\u0627\u064b \u062f\u0648\u0628\u0627\u0631\u0647 \u062a\u0644\u0627\u0634 \u06a9\u0646\u06cc\u062f."
+            else:
+                answer = "Sorry, I'm unable to respond at the moment. Please try again."
+
+        widgets = _build_widgets(intent_label, products, language)
+
+        return {
+            **state,
+            "answer": answer,
+            "widgets": widgets,
+            "sources": retrieved_docs,
+            "products": products,
+        }
+
+    return generate_response
