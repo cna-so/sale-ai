@@ -22,6 +22,8 @@ class Product(BaseModel):
     product_url: str = Field(default="", description="Full product URL")
     source: str = Field(default="unknown", description="Data source identifier")
     available: bool = Field(default=True)
+    description: str = Field(default="", description="Short grounded product blurb when available")
+    highlights: list[str] = Field(default_factory=list, description="Short grounded attribute chips")
 
 
 class ProductSearchResult(BaseModel):

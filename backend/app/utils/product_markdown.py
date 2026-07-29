@@ -33,20 +33,34 @@ def _labels(language: str) -> dict[str, str]:
         return {
             "price": "قیمت",
             "rating": "امتیاز",
+            "reviews": "نظرها",
+            "availability": "موجودی",
+            "in_stock": "موجود",
+            "out_of_stock": "ناموجود / نامشخص",
+            "details": "جزئیات",
+            "highlights": "ویژگی‌ها",
             "why": "چرا مناسب است",
-            "view": "مشاهده محصول",
+            "view": "مشاهده و خرید در دیجی‌کالا",
             "follow_up": "اگر بخواهید می‌توانم گزینه‌های ارزان‌تر، پریمیوم‌تر یا مشابه را هم مقایسه کنم.",
-            "comparison": "مقایسه محصولات",
-            "picks": "گزینه‌های پیشنهادی",
+            "comparison": "مقایسه سریع",
+            "picks": "ویترین محصولات",
+            "source": "منبع",
         }
     return {
         "price": "Price",
         "rating": "Rating",
+        "reviews": "Reviews",
+        "availability": "Availability",
+        "in_stock": "In stock",
+        "out_of_stock": "Unavailable / unknown",
+        "details": "Details",
+        "highlights": "Highlights",
         "why": "Why it fits",
-        "view": "View product",
+        "view": "View & buy on Digikala",
         "follow_up": "I can also narrow this to cheaper, premium, or more similar options.",
-        "comparison": "Product comparison",
-        "picks": "Recommended picks",
+        "comparison": "Quick comparison",
+        "picks": "Product showcase",
+        "source": "Source",
     }
 
 
@@ -56,23 +70,51 @@ def format_product_card(
     language: str = "fa",
     reason: str | None = None,
     include_image: bool = True,
+    index: int | None = None,
 ) -> str:
-    """Render one product as a chat-safe markdown card."""
+    """Render one product as a LibreChat-friendly showcase card."""
     data = _as_dict(product)
     labels = _labels(language)
     title = _product_title(data, language)
-    lines = [f"## {title}" if title else "## Product"]
+    heading = f"### {index}. {title}" if index is not None and title else (f"### {title}" if title else "### Product")
+    lines = [heading]
 
     image_url = data.get("image_url") or ""
     if include_image and image_url:
         lines.append(f"![{title}]({image_url})")
 
     lines.append(f"- **{labels['price']}:** {_format_price(data.get('price'), language)}")
+
     rating = data.get("rating")
-    if rating not in (None, ""):
-        lines.append(f"- **{labels['rating']}:** {rating}")
+    review_count = data.get("review_count") or 0
+    if rating not in (None, "", 0, 0.0):
+        rating_line = f"- **{labels['rating']}:** {rating}"
+        if review_count:
+            rating_line += f" ({review_count} {labels['reviews']})"
+        lines.append(rating_line)
+    elif review_count:
+        lines.append(f"- **{labels['reviews']}:** {review_count}")
+
+    available = data.get("available", True)
+    lines.append(
+        f"- **{labels['availability']}:** "
+        f"{labels['in_stock'] if available else labels['out_of_stock']}"
+    )
+
+    highlights = data.get("highlights") or []
+    if highlights:
+        lines.append(f"- **{labels['highlights']}:** " + " · ".join(str(h) for h in highlights[:4]))
+
+    description = (data.get("description") or "").strip()
+    if description:
+        lines.append(f"- **{labels['details']}:** {description}")
+
     if reason:
         lines.append(f"- **{labels['why']}:** {reason}")
+
+    source = data.get("source") or ""
+    if source:
+        lines.append(f"- **{labels['source']}:** {source}")
 
     product_url = data.get("product_url") or ""
     if product_url:
@@ -89,29 +131,24 @@ def format_product_cards(
     include_image: bool = True,
     title: str | None = None,
 ) -> str:
-    """Render multiple products as markdown cards."""
+    """Render multiple products as an image-forward showcase."""
     if not products:
         return ""
 
     labels = _labels(language)
-    parts: list[str] = []
-    if title:
-        parts.append(f"**{title}**")
-    elif language == "fa":
-        parts.append(f"**{labels['picks']}**")
-    else:
-        parts.append(f"**{labels['picks']}**")
+    parts: list[str] = [f"**{title or labels['picks']}**"]
 
-    for index, product in enumerate(products):
+    for index, product in enumerate(products, start=1):
         reason = None
-        if reasons and index < len(reasons):
-            reason = reasons[index]
+        if reasons and index - 1 < len(reasons):
+            reason = reasons[index - 1]
         parts.append(
             format_product_card(
                 product,
                 language=language,
                 reason=reason,
                 include_image=include_image,
+                index=index,
             )
         )
     return "\n\n".join(parts)
@@ -123,16 +160,16 @@ def format_comparison_table(
     language: str = "fa",
     title: str | None = None,
 ) -> str:
-    """Render a markdown comparison table from grounded product fields."""
+    """Render a compact markdown comparison table from grounded product fields."""
     if not products:
         return ""
 
     labels = _labels(language)
     heading = title or labels["comparison"]
     columns = (
-        ["محصول", "قیمت", "امتیاز"]
+        ["محصول", "قیمت", "امتیاز", "نظرها"]
         if language == "fa"
-        else ["Product", "Price", "Rating"]
+        else ["Product", "Price", "Rating", "Reviews"]
     )
     header = "| " + " | ".join(columns) + " |"
     separator = "|" + "|".join([" --- "] * len(columns)) + "|"
@@ -146,6 +183,7 @@ def format_comparison_table(
                     _product_title(data, language),
                     _format_price(data.get("price"), language),
                     str(data.get("rating", "-")),
+                    str(data.get("review_count", "-")),
                 ]
             )
             + " |"
@@ -177,7 +215,6 @@ def format_widget_markdown(
         )
 
     if wtype == "comparison_table":
-        # Prefer regenerating from products when available; otherwise use stored rows.
         columns = payload.get("columns") or []
         rows = payload.get("rows") or []
         if not columns or not rows:
@@ -206,7 +243,7 @@ def build_shopping_chat_content(
     """
     Dual-path chat content for LibreChat / OpenAI-compatible clients.
 
-    - markdown: card-like markdown (default)
+    - markdown: image-forward product showcase (default)
     - plain: compact text bullets
     - widgets: still flatten to markdown for OpenAI clients (widgets stay internal)
     """
@@ -229,11 +266,8 @@ def build_shopping_chat_content(
         )
 
     parts = [part for part in (intro, product_block) if part]
-    if products and mode != "plain":
+    if products:
         parts.append(labels["follow_up"])
-    elif products and mode == "plain":
-        parts.append(labels["follow_up"])
-
     return "\n\n".join(parts)
 
 
@@ -246,41 +280,28 @@ def _format_markdown_products(
     include_image: bool,
     intent: str | None,
 ) -> str:
-    if intent in {"product_comparison", "recommendation", "gift_recommendation"} and len(products) >= 2:
-        table = format_comparison_table(products, language=language)
+    # Showcase cards first so LibreChat always shows images/details.
+    showcase_products = products[:5] if products else []
+    if showcase_products:
         cards = format_product_cards(
-            products[:3],
+            showcase_products,
             language=language,
             reasons=reasons,
             include_image=include_image,
         )
-        return "\n\n".join(part for part in (table, cards) if part)
+        if intent in {"product_comparison", "recommendation", "gift_recommendation"} and len(products) >= 2:
+            table = format_comparison_table(products[:5], language=language)
+            return "\n\n".join(part for part in (cards, table) if part)
+        return cards
 
     if widgets:
         rendered = [
             format_widget_markdown(widget, language=language, include_image=include_image)
             for widget in widgets
         ]
-        block = "\n\n".join(part for part in rendered if part)
-        if block:
-            return block
+        return "\n\n".join(part for part in rendered if part)
 
-    if not products:
-        return ""
-    if len(products) == 1:
-        reason = reasons[0] if reasons else None
-        return format_product_card(
-            products[0],
-            language=language,
-            reason=reason,
-            include_image=include_image,
-        )
-    return format_product_cards(
-        products,
-        language=language,
-        reasons=reasons,
-        include_image=include_image,
-    )
+    return ""
 
 
 def _format_plain_products(

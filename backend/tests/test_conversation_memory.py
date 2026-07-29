@@ -67,4 +67,4 @@ def test_openai_compat_remembers_prior_turns(client):
     content = body["choices"][0]["message"]["content"]
     assert content
     # Follow-up should resolve against prior product context / history.
-    assert "keyboard" in content.lower() or "کیبورد" in content or "## " in content
+    assert "keyboard" in content.lower() or "کیبورد" in content or "## " in content or "### " in content
