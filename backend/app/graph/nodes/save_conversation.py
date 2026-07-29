@@ -18,6 +18,7 @@ def make_save_conversation_node(repository: ConversationRepository):
         answer = state.get("answer", "")
         intent = state.get("intent")
         products = state.get("products", [])
+        image_analysis = state.get("image_analysis") or state.get("last_image_analysis")
         assistant_message_id = new_id()
 
         user_msg = ChatMessage(
@@ -32,6 +33,10 @@ def make_save_conversation_node(repository: ConversationRepository):
             content=answer,
             intent=intent.intent if intent else None,
             recommended_product_ids=[p.id for p in products],
+            metadata={
+                "products": [product.model_dump() for product in products],
+                "image_analysis": image_analysis.model_dump() if image_analysis else None,
+            },
         )
 
         await repository.save_message(conversation_id, user_msg)

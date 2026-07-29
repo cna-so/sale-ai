@@ -4,6 +4,7 @@ import logging
 
 from backend.app.graph.state import AgentState
 from backend.app.services.intent_service import IntentService
+from backend.app.utils.language import detect_language
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +17,17 @@ def make_detect_intent_node(intent_service: IntentService):
         # Image path: always classify as image_search
         if state.get("image_data") is not None:
             from backend.app.models.domain import IntentResult
+            message = state.get("user_message", "")
+            language = detect_language(message) if message else (
+                "fa" if state.get("locale", "").startswith("fa") else "en"
+            )
             intent = IntentResult(
                 intent="image_search",
                 confidence=1.0,
-                search_query=state.get("user_message", ""),
+                search_query=message,
                 requires_rag=False,
                 requires_product_search=True,
-                detected_language="fa",
+                detected_language=language,
             )
             return {**state, "intent": intent}
 

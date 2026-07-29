@@ -40,6 +40,8 @@ class ShoppingAgent:
             "retrieved_docs": [],
             "products": [],
             "image_analysis": None,
+            "last_products": [],
+            "last_image_analysis": None,
             "react_decision": None,
             "react_iteration": 0,
             "react_steps": [],

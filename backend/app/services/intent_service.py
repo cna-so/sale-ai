@@ -44,12 +44,18 @@ class IntentService:
 
         rag_keywords_fa = ["سیاست بازگشت", "گارانتی", "راهنمای خرید", "سند", "مدرک"]
         rag_keywords_en = ["return policy", "warranty", "buying guide", "document", "policy"]
-        recommendation_keywords_fa = ["بهترین", "پیشنهاد", "مقایسه", "بین", "زیر", "ارزان", "ارزان‌ترین"]
-        recommendation_keywords_en = ["best", "recommend", "compare", "between", "under", "below", "cheapest"]
+        recommendation_keywords_fa = ["بهترین", "پیشنهاد", "زیر", "ارزان", "ارزان‌ترین"]
+        recommendation_keywords_en = ["best", "recommend", "under", "below", "cheapest"]
+        gift_keywords_fa = ["هدیه", "کادو", "تولد", "سالگرد", "برای مادرم", "برای دوستم"]
+        gift_keywords_en = ["gift", "present", "birthday", "anniversary", "for my mom", "for my friend"]
+        comparison_keywords_fa = ["مقایسه", "تفاوت", "فرق", "بین", "کدوم بهتره"]
+        comparison_keywords_en = ["compare", "difference", "versus", " vs ", "which is better"]
+        detail_keywords_fa = ["مشخصات", "جزئیات", "درباره", "نظرها", "گزینه اول", "این محصول"]
+        detail_keywords_en = ["details", "specs", "reviews", "tell me about", "first option", "this product"]
         product_keywords_fa = ["می‌خوام", "میخوام", "دنبال", "خرید", "کیبورد", "هدفون", "ماوس", "لپتاپ", "لپ‌تاپ"]
         product_keywords_en = ["looking for", "buy", "keyboard", "headphone", "mouse", "laptop", "monitor"]
-        follow_up_keywords_fa = ["همون", "این یکی", "گزینه اول", "کدوم بهتره", "مقایسه‌شون"]
-        follow_up_keywords_en = ["that one", "first one", "which is better", "compare them", "what about"]
+        follow_up_keywords_fa = ["همون", "این یکی", "گزینه اول", "کدوم بهتره", "مقایسه‌شون", "ارزان‌تر", "رسمی‌تر"]
+        follow_up_keywords_en = ["that one", "first one", "which is better", "compare them", "what about", "cheaper", "more formal"]
 
         def has_any(tokens: list[str]) -> bool:
             return any(token in normalized for token in tokens)
@@ -65,12 +71,52 @@ class IntentService:
                 detected_language=language,
             )
 
+        filters = IntentFilters(
+            price=PriceFilter(min_toman=min_price, max_toman=max_price),
+        )
+        active_gift_keywords = gift_keywords_fa if language == "fa" else gift_keywords_en
+        active_comparison_keywords = comparison_keywords_fa if language == "fa" else comparison_keywords_en
+        active_detail_keywords = detail_keywords_fa if language == "fa" else detail_keywords_en
+
+        if has_any(active_gift_keywords):
+            return IntentResult(
+                intent="gift_recommendation",
+                confidence=0.86,
+                search_query=message,
+                filters=filters,
+                requires_rag=False,
+                requires_product_search=True,
+                detected_language=language,
+            )
+
+        if has_any(active_comparison_keywords):
+            return IntentResult(
+                intent="product_comparison",
+                confidence=0.84,
+                search_query=message,
+                filters=filters,
+                requires_rag=False,
+                requires_product_search=True,
+                detected_language=language,
+            )
+
+        if has_any(active_detail_keywords) and history:
+            return IntentResult(
+                intent="product_detail",
+                confidence=0.78,
+                search_query=message,
+                filters=filters,
+                requires_rag=False,
+                requires_product_search=True,
+                detected_language=language,
+            )
+
         if has_any(follow_up_keywords_fa if language == "fa" else follow_up_keywords_en) and history:
             return IntentResult(
                 intent="follow_up",
                 confidence=0.76,
                 search_query=message,
-                filters=IntentFilters(price=PriceFilter(min_toman=min_price, max_toman=max_price)),
+                filters=filters,
                 requires_rag=False,
                 requires_product_search=True,
                 detected_language=language,
@@ -81,7 +127,7 @@ class IntentService:
                 intent="recommendation",
                 confidence=0.84,
                 search_query=message,
-                filters=IntentFilters(price=PriceFilter(min_toman=min_price, max_toman=max_price)),
+                filters=filters,
                 requires_rag=False,
                 requires_product_search=True,
                 detected_language=language,
@@ -92,7 +138,7 @@ class IntentService:
                 intent="product_search",
                 confidence=0.78,
                 search_query=message,
-                filters=IntentFilters(price=PriceFilter(min_toman=min_price, max_toman=max_price)),
+                filters=filters,
                 requires_rag=False,
                 requires_product_search=True,
                 detected_language=language,
@@ -102,7 +148,7 @@ class IntentService:
             intent="general_chat",
             confidence=0.60,
             search_query=message,
-            filters=IntentFilters(price=PriceFilter(min_toman=min_price, max_toman=max_price)),
+            filters=filters,
             requires_rag=False,
             requires_product_search=False,
             detected_language=language,

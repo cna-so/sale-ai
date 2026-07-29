@@ -24,6 +24,9 @@ def _fallback_decision(state: AgentState) -> ReActDecision:
         "rag_query": "rag_search",
         "product_search": "product_search",
         "recommendation": "product_search",
+        "gift_recommendation": "product_search",
+        "product_comparison": "product_search",
+        "product_detail": "product_search",
         "follow_up": "product_search",
         "image_search": "image_search",
     }

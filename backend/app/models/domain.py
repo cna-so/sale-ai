@@ -97,6 +97,8 @@ class IntentFilters(BaseModel):
     category: str | None = None
     brand: str | None = None
     color: str | None = None
+    occasion: str | None = None
+    recipient_hint: str | None = None
 
 
 class IntentResult(BaseModel):

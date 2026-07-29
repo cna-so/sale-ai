@@ -35,6 +35,8 @@ class AgentState(TypedDict, total=False):
     retrieved_docs: list[RetrievedDocument]
     products: list[Product]
     image_analysis: ImageAnalysisResult | None
+    last_products: list[Product]
+    last_image_analysis: ImageAnalysisResult | None
 
     # ReAct controller state (internal-only; never returned to API clients)
     react_decision: ReActDecision | None

@@ -6,6 +6,7 @@ from typing import Any
 from backend.app.core.exceptions import LLMError
 from backend.app.graph.state import AgentState
 from backend.app.models.domain import Product, RetrievedDocument
+from backend.app.prompts.recommendation import RECOMMENDATION_GUIDANCE_EN, RECOMMENDATION_GUIDANCE_FA
 from backend.app.prompts.response import RESPONSE_SYSTEM_PROMPT_EN, RESPONSE_SYSTEM_PROMPT_FA
 from backend.app.schemas.widgets import (
     ComparisonTableData,
@@ -35,7 +36,9 @@ def _build_product_context(products: list[Product], language: str) -> str:
     lines = []
     for i, p in enumerate(products):
         price_str = format_price_toman(p.price) if p.price else "-"
-        lines.append(f"{i+1}. {p.title} | {price_str} | \u0627\u0645\u062a\u06cc\u0627\u0632: {p.rating}")
+        title = p.title if language == "fa" else (p.title_en or p.title)
+        rating_label = "\u0627\u0645\u062a\u06cc\u0627\u0632" if language == "fa" else "Rating"
+        lines.append(f"{i+1}. {title} | {price_str} | {rating_label}: {p.rating}")
     return "\n".join(lines)
 
 
@@ -43,18 +46,22 @@ def _build_widgets(intent: str, products: list[Product], language: str) -> list[
     if not products:
         return []
 
-    if intent == "recommendation" and len(products) >= 3:
-        title = "\u0645\u062d\u0635\u0648\u0644\u0627\u062a \u067e\u06cc\u0634\u0646\u0647\u0627\u062f\u06cc" if language == "fa" else "Recommended Products"
+    if intent in {"recommendation", "gift_recommendation", "product_comparison"} and len(products) >= 2:
+        title = "\u0645\u0642\u0627\u06cc\u0633\u0647 \u0645\u062d\u0635\u0648\u0644\u0627\u062a" if intent == "product_comparison" and language == "fa" else (
+            "Product Comparison" if intent == "product_comparison" else (
+                "\u0645\u062d\u0635\u0648\u0644\u0627\u062a \u067e\u06cc\u0634\u0646\u0647\u0627\u062f\u06cc" if language == "fa" else "Recommended Products"
+            )
+        )
         columns_fa = ["\u0645\u062d\u0635\u0648\u0644", "\u0642\u06cc\u0645\u062a", "\u0627\u0645\u062a\u06cc\u0627\u0632"]
         columns_en = ["Product", "Price", "Rating"]
         columns = columns_fa if language == "fa" else columns_en
         rows = [
-            [p.title, format_price_toman(p.price) if p.price else "-", str(p.rating)]
+            [p.title if language == "fa" else (p.title_en or p.title), format_price_toman(p.price) if p.price else "-", str(p.rating)]
             for p in products
         ]
         return [ComparisonTableWidget(data=ComparisonTableData(title=title, columns=columns, rows=rows))]
 
-    if len(products) == 1:
+    if len(products) == 1 or intent == "product_detail":
         return [ProductCardWidget(data=ProductCardData(product=products[0]))]
 
     carousel_title = "\u0646\u062a\u0627\u06cc\u062c \u062c\u0633\u062a\u062c\u0648" if language == "fa" else "Search Results"
@@ -68,13 +75,13 @@ def make_generate_response_node(llm_service: LLMService, recommendation_service:
         language = intent_result.detected_language if intent_result else "fa"
         products = state.get("products", [])
         retrieved_docs = state.get("retrieved_docs", [])
-        image_analysis = state.get("image_analysis")
+        image_analysis = state.get("image_analysis") or state.get("last_image_analysis")
         user_message = state["user_message"]
         history = state.get("history", [])
         preferences = state.get("preferences")
 
-        # Apply recommendation ranking when intent is recommendation
-        if intent_label == "recommendation" and products:
+        recommendation_reasons: list[str] = []
+        if intent_label in {"recommendation", "gift_recommendation"} and products:
             min_t = intent_result.filters.price.min_toman if intent_result else None
             max_t = intent_result.filters.price.max_toman if intent_result else None
             recommendations = recommendation_service.recommend(
@@ -85,8 +92,13 @@ def make_generate_response_node(llm_service: LLMService, recommendation_service:
                 max_toman=max_t,
             )
             products = [r.product for r in recommendations]
+            recommendation_reasons = [r.reason for r in recommendations]
 
         system_prompt = RESPONSE_SYSTEM_PROMPT_FA if language == "fa" else RESPONSE_SYSTEM_PROMPT_EN
+        if intent_label in {"recommendation", "gift_recommendation"}:
+            system_prompt += "\n\n" + (
+                RECOMMENDATION_GUIDANCE_FA if language == "fa" else RECOMMENDATION_GUIDANCE_EN
+            )
 
         context_parts: list[str] = []
         if retrieved_docs:
@@ -94,6 +106,9 @@ def make_generate_response_node(llm_service: LLMService, recommendation_service:
         if products:
             label = "\u0645\u062d\u0635\u0648\u0644\u0627\u062a \u06cc\u0627\u0641\u062a \u0634\u062f\u0647" if language == "fa" else "Found products"
             context_parts.append(f"{label}:\n" + _build_product_context(products, language))
+        if recommendation_reasons:
+            label = "\u062f\u0644\u0627\u06cc\u0644 \u0627\u0646\u062a\u062e\u0627\u0628" if language == "fa" else "Recommendation fit"
+            context_parts.append(f"{label}:\n" + "\n".join(recommendation_reasons))
         if image_analysis:
             img_label = "\u062a\u062d\u0644\u06cc\u0644 \u062a\u0635\u0648\u06cc\u0631" if language == "fa" else "Image analysis"
             context_parts.append(f"{img_label}: {image_analysis.concise_description} | Query: {image_analysis.suggested_search_query}")
