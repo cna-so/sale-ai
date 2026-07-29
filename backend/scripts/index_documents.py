@@ -40,8 +40,10 @@ async def main() -> None:
         logger.warning("No documents found in %s", DOCS_DIR)
         return
 
+    logger.info("Found %d document(s) in %s", len(md_files), DOCS_DIR)
     for doc_path in sorted(md_files):
         try:
+            logger.info("Starting '%s' ...", doc_path.name)
             result = await service.index_file(doc_path)
             logger.info(
                 "Indexed '%s' -> %d chunks (doc_id=%s)",

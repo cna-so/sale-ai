@@ -57,8 +57,13 @@ def chunk_text(
             )
             idx += 1
 
-        start = end - chunk_overlap
-        if start >= end:  # safety guard
+        # Final window consumed — stop before overlap rewinds into an infinite loop.
+        if end >= length:
             break
+
+        next_start = end - chunk_overlap
+        if next_start <= start:
+            break
+        start = next_start
 
     return chunks
