@@ -1,0 +1,78 @@
+# Full-stack deployment: sale-ai + LibreChat + Qdrant + MongoDB
+#
+# Usage:
+#   cp .env.example .env          # fill OPENROUTER_API_KEY
+#   cp .env.librechat.example .env.librechat   # fill OPENAI_API_KEY=ignored, JWT_SECRET, etc.
+#   docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build
+#
+# sale-ai API:     http://localhost:8000
+# LibreChat UI:    http://localhost:3080
+# Qdrant:          http://localhost:6333/dashboard
+
+version: '3.9'
+
+networks:
+  sale-ai-net:
+    driver: bridge
+
+services:
+  # ── sale-ai backend ──────────────────────────────────────────────────────
+  api:
+    # Inherits build context from base docker-compose.yml
+    networks:
+      - sale-ai-net
+
+  qdrant:
+    networks:
+      - sale-ai-net
+
+  # ── MongoDB for LibreChat ─────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    networks:
+      - sale-ai-net
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: librechat
+      MONGO_INITDB_ROOT_PASSWORD: librechat_secret
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── LibreChat ─────────────────────────────────────────────────────────────
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    networks:
+      - sale-ai-net
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      api:
+        condition: service_started
+    env_file:
+      - .env.librechat
+    environment:
+      # MongoDB connection
+      MONGO_URI: "mongodb://librechat:librechat_secret@mongodb:27017/LibreChat?authSource=admin"
+      # Config file path
+      CONFIG_PATH: /app/librechat.yaml
+      # Disable built-in OpenAI so the only option is Digikala Assistant
+      OPENAI_API_KEY: "user_provided"
+      ALLOW_REGISTRATION: "true"
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      - librechat_uploads:/app/client/public/images
+      - librechat_logs:/app/api/logs
+
+volumes:
+  mongodb_data:
+  librechat_uploads:
+  librechat_logs:
