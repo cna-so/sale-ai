@@ -61,3 +61,4 @@ qdrant_storage/
 # Environment
 .env
 *.env.local
+.env.librechat
