@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     # OpenRouter
     openrouter_api_key: str = Field(default="", description="OpenRouter API key")
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_chat_model: str = "openai/gpt-4o-mini"
-    openrouter_vision_model: str = "openai/gpt-4o"
+    openrouter_chat_model: str = "google/gemini-2.5-flash-lite"
+    openrouter_vision_model: str = "google/gemini-2.5-flash-lite"
     openrouter_embedding_model: str = "openai/text-embedding-3-small"
 
     # Qdrant
