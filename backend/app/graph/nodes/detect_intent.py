@@ -29,6 +29,7 @@ def make_detect_intent_node(intent_service: IntentService):
                 requires_product_search=True,
                 detected_language=language,
             )
+            logger.info("Intent detected: image_search (1.00) lang=%s image_bytes=%d", language, len(state["image_data"]))
             return {**state, "intent": intent}
 
         intent = await intent_service.detect_intent(

@@ -22,6 +22,7 @@ import re
 import time
 from typing import AsyncIterator
 from urllib.parse import urlparse
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -151,6 +152,9 @@ def _build_prior_messages(messages: list[OAIMessage]) -> list[ChatMessage]:
     return history
 
 
+LIBRECHAT_UPLOAD_ROOT = Path("/librechat_uploads")
+
+
 def _extract_image_data(url: str) -> tuple[bytes, str] | None:
     """Decode OpenAI data URLs or a LibreChat image mounted into this container."""
     if url.startswith("data:image/"):
@@ -164,13 +168,36 @@ def _extract_image_data(url: str) -> tuple[bytes, str] | None:
             return None
 
     parsed = urlparse(url)
-    if parsed.path.startswith("/images/"):
-        from pathlib import Path
+    path = parsed.path or ""
+    # LibreChat serves uploads under /images/{userId}/{filename}
+    # and mounts that tree into this container at /librechat_uploads.
+    candidates: list[Path] = []
+    if "/images/" in path:
+        relative = path.split("/images/", 1)[1].lstrip("/")
+        if relative:
+            candidates.append(LIBRECHAT_UPLOAD_ROOT / relative)
+            candidates.append(LIBRECHAT_UPLOAD_ROOT / Path(relative).name)
+    elif path.startswith("/uploads/") or path.startswith("/files/"):
+        relative = path.lstrip("/").split("/", 1)[-1]
+        candidates.append(LIBRECHAT_UPLOAD_ROOT / Path(path).name)
+        if relative:
+            candidates.append(LIBRECHAT_UPLOAD_ROOT / relative)
 
-        image_path = Path("/librechat_uploads") / Path(parsed.path).name
+    for image_path in candidates:
         if image_path.is_file():
-            content_type = "image/" + (image_path.suffix.removeprefix(".") or "jpeg")
+            suffix = image_path.suffix.removeprefix(".").lower() or "jpeg"
+            if suffix == "jpg":
+                suffix = "jpeg"
+            content_type = f"image/{suffix}"
+            logger.info(
+                "Loaded LibreChat upload image from %s (%d bytes)",
+                image_path,
+                image_path.stat().st_size,
+            )
             return image_path.read_bytes(), content_type
+
+    if path.startswith("/images/") or "/images/" in path:
+        logger.warning("LibreChat image URL could not be resolved on disk: %s", url[:200])
     return None
 
 
@@ -183,15 +210,21 @@ def _extract_user_input(req: OAIChatRequest) -> tuple[str, bytes | None, str | N
             return msg.content, None, None
         text_parts: list[str] = []
         image: tuple[bytes, str] | None = None
+        unresolved_image = False
         for part in msg.content:
             if part.type == "text" and part.text:
                 text_parts.append(part.text)
             if part.type == "image_url" and part.image_url and image is None:
                 url = part.image_url.url if isinstance(part.image_url, OAIImageURL) else part.image_url
                 image = _extract_image_data(url)
+                if image is None:
+                    unresolved_image = True
+                    logger.warning("Could not decode image_url from LibreChat payload: %.120s", url)
         text = "\n".join(text_parts)
         if image:
             return text, image[0], image[1]
+        if unresolved_image and not text:
+            text = "Find products similar to this uploaded image"
         return text, None, None
     return "", None, None
 
@@ -252,6 +285,54 @@ async def _stream_response(content: str, request_id: str) -> AsyncIterator[str]:
     yield "data: [DONE]\n\n"
 
 
+def _is_librechat_title_request(message: str) -> bool:
+    """LibreChat asks the same endpoint to invent a short chat title."""
+    lower = (message or "").lower()
+    return (
+        "title for the conversation" in lower
+        or "5-word-or-less title" in lower
+        or "concise, 5-word-or-less title" in lower
+    )
+
+
+def _quick_conversation_title(messages: list[OAIMessage]) -> str:
+    """Derive a short title without calling the shopping graph / OpenRouter."""
+    for msg in messages:
+        if msg.role != "user":
+            continue
+        text = _message_text(msg.content)
+        if not text or _is_librechat_title_request(text):
+            continue
+        # Prefer Persian/English product-ish first words.
+        words = text.replace("\n", " ").split()
+        title = " ".join(words[:5]).strip(" .،,")
+        if title:
+            return title[:60]
+    return "Shopping Chat"
+
+
+def _completion_payload(content: str, request_id: str) -> dict:
+    return {
+        "id": request_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": MODEL_ID,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": content,
+            },
+            "finish_reason": "stop",
+        }],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -288,9 +369,24 @@ async def chat_completions(
     request_id = f"chatcmpl-{new_id()}"
 
     logger.info(
-        "OAI-compat request | conv=%s | stream=%s | history=%d | msg=%.80s",
-        conversation_id, req.stream, len(prior_messages), user_message,
+        "OAI-compat request | conv=%s | stream=%s | history=%d | image=%s | msg=%.80s",
+        conversation_id, req.stream, len(prior_messages), bool(image_data), user_message,
     )
+
+    # Title requests race with the real chat turn and burn OpenRouter quota.
+    if _is_librechat_title_request(user_message) and image_data is None:
+        title = _quick_conversation_title(req.messages)
+        logger.info("OAI-compat title shortcut | conv=%s | title=%s", conversation_id, title)
+        if req.stream:
+            return StreamingResponse(
+                _stream_response(title, request_id),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        return _completion_payload(title, request_id)
 
     state = await agent.run(
         conversation_id=conversation_id,
@@ -312,23 +408,4 @@ async def chat_completions(
             },
         )
 
-    # Spec-compliant body only — no custom top-level shopping fields.
-    return {
-        "id": request_id,
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": MODEL_ID,
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": content,
-            },
-            "finish_reason": "stop",
-        }],
-        "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        },
-    }
+    return _completion_payload(content, request_id)

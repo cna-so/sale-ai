@@ -27,3 +27,17 @@ Rules:
 - confidence must be a number between 0 and 1
 - No extra text outside JSON
 """
+
+IMAGE_DESC_PROMPT_FA = """\
+این تصویر یک محصول فروشگاهی است.
+در حداکثر دو جمله کوتاه فارسی بگو این محصول چیست و چه ویژگی‌های دیداری مهمی دارد.
+اگر ممکن است یک عبارت کوتاه مناسب جستجو در دیجی‌کالا هم پیشنهاد بده.
+JSON ننویس.
+"""
+
+IMAGE_DESC_PROMPT_EN = """\
+This image shows a retail product.
+In at most two short sentences, describe what the product is and its key visual attributes.
+Also suggest a short shopping search phrase if possible.
+Do not write JSON.
+"""

@@ -112,6 +112,19 @@ def make_generate_response_node(llm_service: LLMService, recommendation_service:
         if image_analysis:
             img_label = "\u062a\u062d\u0644\u06cc\u0644 \u062a\u0635\u0648\u06cc\u0631" if language == "fa" else "Image analysis"
             context_parts.append(f"{img_label}: {image_analysis.concise_description} | Query: {image_analysis.suggested_search_query}")
+        elif state.get("image_data") is not None or state.get("used_image_analysis"):
+            # Prevent the response model from wrongly claiming no image was uploaded.
+            if language == "fa":
+                context_parts.append(
+                    "توجه: کاربر یک تصویر محصول آپلود کرده است. تحلیل بینایی موقتاً ناموفق بود. "
+                    "هرگز نگو که تصویری آپلود نشده. اگر محصولی پیدا شد معرفی کن؛ وگرنه بخواه توضیح کوتاه متنی بدهد."
+                )
+            else:
+                context_parts.append(
+                    "Note: The user uploaded a product image. Vision analysis failed temporarily. "
+                    "Do NOT say that no image was uploaded. If products were found, present them; "
+                    "otherwise ask for a short text description of the product."
+                )
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
 

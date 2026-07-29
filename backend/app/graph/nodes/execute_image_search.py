@@ -21,9 +21,12 @@ def make_execute_image_search_node(image_tool: ImageUnderstandingTool, product_t
             else state.get("user_message") or None
         )
         locale = state.get("locale", "fa-IR")
+        user_message = (state.get("user_message") or "").strip()
 
         image_analysis = None
         products = []
+        vision_error: str | None = None
+        observation = "No image was available for analysis."
 
         if image_data:
             try:
@@ -34,25 +37,41 @@ def make_execute_image_search_node(image_tool: ImageUnderstandingTool, product_t
                     locale=locale,
                 )
                 image_analysis = tool_result.data
-
-                search_query = image_analysis.suggested_search_query
+                search_query = image_analysis.suggested_search_query or user_message
                 product_result = await product_tool.run(query=search_query, max_results=5)
                 products = product_result.data.products if product_result.success and product_result.data else []
+                observation = f"Analyzed image and found {len(products)} product(s)."
             except ImageProcessingError as exc:
+                vision_error = str(exc)
                 logger.warning("Image processing error: %s", exc)
+                # Fall back to text search so the user still gets products.
+                fallback_query = user_message or (instruction or "")
+                if fallback_query:
+                    product_result = await product_tool.run(query=fallback_query, max_results=5)
+                    products = (
+                        product_result.data.products
+                        if product_result.success and product_result.data
+                        else []
+                    )
+                observation = (
+                    f"Image received but vision analysis failed; "
+                    f"searched with text and found {len(products)} product(s)."
+                )
             except Exception as exc:
+                vision_error = str(exc)
                 logger.warning("Image search pipeline failed: %s", exc)
+                observation = f"Image search pipeline failed: {exc}"
+        else:
+            logger.warning("image_search requested but image_data is missing")
 
         return {
             **state,
             "image_analysis": image_analysis,
             "products": products,
-            "used_image_analysis": True,
+            "used_image_analysis": image_data is not None,
             "used_product_search": len(products) > 0,
-            "react_steps": add_react_observation(
-                state,
-                f"Analyzed image and found {len(products)} product(s).",
-            ),
+            "error": vision_error or state.get("error"),
+            "react_steps": add_react_observation(state, observation),
         }
 
     return execute_image_search
