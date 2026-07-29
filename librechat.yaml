@@ -21,7 +21,7 @@ endpoints:
       # the 'sale-ai-net' network, so use the service name directly.
       # For a standalone LibreChat instance on the same host, use:
       #   baseURL: "http://host.docker.internal:8000"
-      baseURL: "http://sale-ai-api:8000"
+      baseURL: "http://api:8000/v1"
 
       models:
         default: ["sale-ai"]
