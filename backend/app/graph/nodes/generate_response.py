@@ -142,6 +142,7 @@ def make_generate_response_node(llm_service: LLMService, recommendation_service:
             "widgets": widgets,
             "sources": retrieved_docs,
             "products": products,
+            "recommendation_reasons": recommendation_reasons,
         }
 
     return generate_response

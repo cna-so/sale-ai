@@ -48,6 +48,7 @@ class ShoppingAgent:
             "answer": "",
             "widgets": [],
             "sources": [],
+            "recommendation_reasons": [],
             "used_rag": False,
             "used_product_search": False,
             "used_image_analysis": False,

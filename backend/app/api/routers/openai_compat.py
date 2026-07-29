@@ -5,12 +5,11 @@ LibreChat (and any OpenAI-compatible client) sends:
   { model, messages, stream, ... }
 
 This adapter:
-  1. Extracts the last user message plus an optional conversation_id stored
-     in the system prompt (LibreChat passes it via a hidden system message).
-  2. Calls the existing ShoppingAgent with the full message history context.
+  1. Extracts the last user message plus an optional conversation_id.
+  2. Calls the existing ShoppingAgent.
   3. Returns a standard OpenAI chat completion (or SSE stream).
-  4. Serialises rich widgets (comparison tables, product cards) as Markdown
-     so LibreChat renders them natively.
+  4. Flattens product widgets into chat-safe markdown/plain text so LibreChat
+     can render card-like shopping results without custom widget support.
 """
 from __future__ import annotations
 
@@ -28,8 +27,9 @@ from pydantic import BaseModel, Field
 
 from backend.app.agents.shopping_agent import ShoppingAgent
 from backend.app.api.dependencies import get_shopping_agent
-from backend.app.schemas.chat import DebugInfo
+from backend.app.core.config import Settings, get_settings
 from backend.app.utils.ids import new_id
+from backend.app.utils.product_markdown import build_shopping_chat_content
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["openai-compat"])
@@ -67,101 +67,11 @@ class OAIChatRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Widget → Markdown serialiser
-# ---------------------------------------------------------------------------
-
-def _widget_to_markdown(widget: dict) -> str:
-    """Convert a sale-ai widget payload to a Markdown string."""
-    wtype = widget.get("type", "")
-    data = widget.get("data", {})
-
-    if wtype == "comparison_table":
-        title = data.get("title", "")
-        columns: list[str] = data.get("columns", [])
-        rows: list[list] = data.get("rows", [])
-        if not columns:
-            return ""
-        header = "| " + " | ".join(str(c) for c in columns) + " |"
-        sep = "|" + "|".join([" --- "] * len(columns)) + "|"
-        body_lines = [
-            "| " + " | ".join(str(cell) for cell in row) + " |"
-            for row in rows
-        ]
-        parts = []
-        if title:
-            parts.append(f"**{title}**")
-        parts += [header, sep] + body_lines
-        return "\n".join(parts)
-
-    if wtype == "product_card":
-        product = data.get("product", data)
-        name = product.get("title_en") or product.get("title", "")
-        price = product.get("price", "")
-        rating = product.get("rating", "")
-        url = product.get("product_url", "")
-        lines = [f"**{name}**"]
-        if price:
-            lines.append(f"- قیمت: {price}")
-        if rating:
-            lines.append(f"- امتیاز: {rating}")
-        if url:
-            lines.append(f"- [مشاهده محصول]({url})")
-        return "\n".join(lines)
-
-    if wtype == "product_carousel":
-        title = data.get("title", "")
-        product_lines = []
-        for product in data.get("products", []):
-            name = product.get("title_en") or product.get("title", "")
-            price = product.get("price", "")
-            url = product.get("product_url", "")
-            product_lines.append(
-                f"- **{name}**"
-                + (f" — {price:,} toman" if isinstance(price, int) else "")
-                + (f" ([view]({url}))" if url else "")
-            )
-        return "\n".join(([f"**{title}**"] if title else []) + product_lines)
-
-    if wtype == "text":
-        return data.get("content", "")
-
-    # Generic fallback: dump as JSON code block
-    return f"```json\n{json.dumps(widget, ensure_ascii=False, indent=2)}\n```"
-
-
-def _build_content(answer: str, widgets: list, products: list) -> str:
-    """Combine agent answer + widgets + products into a single Markdown string."""
-    parts = [answer] if answer else []
-
-    for w in widgets or []:
-        md = _widget_to_markdown(w if isinstance(w, dict) else w.model_dump())
-        if md:
-            parts.append(md)
-
-    for p in products or []:
-        p_dict = p if isinstance(p, dict) else p.model_dump()
-        name = p_dict.get("title_en") or p_dict.get("title", "")
-        price = p_dict.get("price", "")
-        url = p_dict.get("product_url", "")
-        line = f"- **{name}**" + (f" — {price}" if price else "") + (f" ([link]({url}))" if url else "")
-        parts.append(line)
-
-    return "\n\n".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Conversation-id extraction helpers
+# Conversation-id / multimodal helpers
 # ---------------------------------------------------------------------------
 
 def _extract_conversation_id(req: OAIChatRequest) -> str | None:
-    """Try to find a reusable conversation_id from the request.
-
-    LibreChat does not natively forward a conversation_id in the OAI body,
-    but we check three places:
-    1. An explicit `conversation_id` field (custom LibreChat param).
-    2. A system message containing `[conversation_id:<id>]` marker.
-    3. Generate a fresh one so the whole request stays in one thread.
-    """
+    """Try to find a reusable conversation_id from the request."""
     if req.conversation_id:
         return req.conversation_id
 
@@ -218,6 +128,32 @@ def _extract_user_input(req: OAIChatRequest) -> tuple[str, bytes | None, str | N
     return "", None, None
 
 
+def _resolve_language(state: dict) -> str:
+    intent = state.get("intent")
+    if intent is not None and getattr(intent, "detected_language", None):
+        return intent.detected_language
+    locale = state.get("locale") or ""
+    return "fa" if locale.startswith("fa") else "en"
+
+
+def _build_assistant_content(state: dict, settings: Settings) -> str:
+    """Flatten shopping state into OpenAI-spec assistant text."""
+    intent = state.get("intent")
+    intent_label = intent.intent if intent is not None else None
+    # OpenAI clients cannot render custom widgets; widgets mode still flattens.
+    render_mode = "markdown" if settings.librechat_render_mode == "widgets" else settings.librechat_render_mode
+    return build_shopping_chat_content(
+        answer=state.get("answer", ""),
+        products=state.get("products", []),
+        widgets=state.get("widgets", []),
+        reasons=state.get("recommendation_reasons", []),
+        language=_resolve_language(state),
+        render_mode=render_mode,
+        include_image=settings.librechat_include_product_images,
+        intent=intent_label,
+    )
+
+
 # ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
@@ -243,7 +179,7 @@ async def _stream_response(content: str, request_id: str) -> AsyncIterator[str]:
     for i, word in enumerate(words):
         chunk_text = word + (" " if i < len(words) - 1 else "")
         yield _sse_chunk(chunk_text, request_id)
-        await asyncio.sleep(0)  # yield control; replace with real streaming when LLM supports it
+        await asyncio.sleep(0)
     yield _sse_chunk("", request_id, finish=True)
     yield "data: [DONE]\n\n"
 
@@ -275,6 +211,7 @@ async def list_models():
 async def chat_completions(
     req: OAIChatRequest,
     agent: ShoppingAgent = Depends(get_shopping_agent),
+    settings: Settings = Depends(get_settings),
 ):
     """OpenAI-compatible chat completions endpoint."""
     user_message, image_data, image_content_type = _extract_user_input(req)
@@ -286,7 +223,6 @@ async def chat_completions(
         conversation_id, req.stream, user_message,
     )
 
-    # Run the LangGraph shopping agent
     state = await agent.run(
         conversation_id=conversation_id,
         user_message=user_message,
@@ -294,11 +230,7 @@ async def chat_completions(
         image_content_type=image_content_type,
     )
 
-    content = _build_content(
-        answer=state.get("answer", ""),
-        widgets=state.get("widgets", []),
-        products=state.get("products", []),
-    )
+    content = _build_assistant_content(state, settings)
 
     if req.stream:
         return StreamingResponse(
@@ -310,6 +242,7 @@ async def chat_completions(
             },
         )
 
+    # Spec-compliant body only — no custom top-level shopping fields.
     return {
         "id": request_id,
         "object": "chat.completion",

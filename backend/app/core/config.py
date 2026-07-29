@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # ReAct controller
     react_max_iterations: int = Field(default=3, ge=1, le=8)
 
+    # LibreChat / OpenAI-compatible rendering
+    # markdown: card-like markdown in chat content (best default for LibreChat)
+    # plain: compact text-only bullets
+    # widgets: keep internal widgets for first-party clients; OAI still flattens safely
+    librechat_render_mode: Literal["markdown", "plain", "widgets"] = "markdown"
+    librechat_include_product_images: bool = True
+
     # Locale
     default_locale: str = "fa-IR"
     default_currency: str = "IRR"

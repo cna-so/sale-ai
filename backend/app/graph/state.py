@@ -47,6 +47,7 @@ class AgentState(TypedDict, total=False):
     answer: str
     widgets: list[Any]
     sources: list[RetrievedDocument]
+    recommendation_reasons: list[str]
 
     # Debug flags
     used_rag: bool
