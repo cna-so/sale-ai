@@ -27,6 +27,7 @@ class ShoppingAgent:
         currency: str = "IRR",
         image_data: bytes | None = None,
         image_content_type: str | None = None,
+        prior_messages: list | None = None,
     ) -> AgentState:
         initial_state: AgentState = {
             "conversation_id": conversation_id,
@@ -36,6 +37,7 @@ class ShoppingAgent:
             "image_data": image_data,
             "image_content_type": image_content_type,
             "history": [],
+            "client_history": list(prior_messages or []),
             "preferences": UserPreferences(),
             "retrieved_docs": [],
             "products": [],

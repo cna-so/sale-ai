@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
+import re
 import time
 from typing import AsyncIterator
 from urllib.parse import urlparse
@@ -28,6 +30,7 @@ from pydantic import BaseModel, Field
 from backend.app.agents.shopping_agent import ShoppingAgent
 from backend.app.api.dependencies import get_shopping_agent
 from backend.app.core.config import Settings, get_settings
+from backend.app.models.domain import ChatMessage
 from backend.app.utils.ids import new_id
 from backend.app.utils.product_markdown import build_shopping_chat_content
 
@@ -70,19 +73,82 @@ class OAIChatRequest(BaseModel):
 # Conversation-id / multimodal helpers
 # ---------------------------------------------------------------------------
 
+def _message_text(content: str | list[OAIContentPart] | None) -> str:
+    """Normalize OpenAI message content to plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    parts: list[str] = []
+    for part in content:
+        if part.type == "text" and part.text:
+            parts.append(part.text.strip())
+    return "\n".join(p for p in parts if p)
+
+
 def _extract_conversation_id(req: OAIChatRequest) -> str | None:
-    """Try to find a reusable conversation_id from the request."""
+    """Find a reusable conversation id from common OpenAI / LibreChat fields."""
     if req.conversation_id:
         return req.conversation_id
 
+    extra = getattr(req, "model_extra", None) or {}
+    for key in ("conversationId", "conversation_id", "thread_id", "chat_id", "parentMessageId"):
+        value = extra.get(key)
+        if value:
+            return str(value)
+
     for msg in req.messages:
         if msg.role == "system" and msg.content:
-            import re
-            m = re.search(r"\[conversation_id:([\w-]+)\]", msg.content)
+            text = _message_text(msg.content)
+            m = re.search(r"\[conversation_id:([\w-]+)\]", text)
             if m:
                 return m.group(1)
 
     return None
+
+
+def _stable_conversation_id(messages: list[OAIMessage]) -> str:
+    """
+    Derive a stable id from the first user turn so LibreChat threads keep memory
+    even when no conversation_id is forwarded.
+    """
+    for msg in messages:
+        if msg.role != "user":
+            continue
+        text = _message_text(msg.content)
+        if text:
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+            return f"lc-{digest}"
+    return new_id()
+
+
+def _build_prior_messages(messages: list[OAIMessage]) -> list[ChatMessage]:
+    """Convert prior OpenAI messages into ChatMessage history (exclude latest user)."""
+    if not messages:
+        return []
+
+    # Drop trailing user message — that is the current turn.
+    prior = list(messages)
+    while prior and prior[-1].role != "user":
+        prior.pop()
+    if prior and prior[-1].role == "user":
+        prior = prior[:-1]
+
+    history: list[ChatMessage] = []
+    for msg in prior:
+        if msg.role not in {"user", "assistant"}:
+            continue
+        text = _message_text(msg.content)
+        if not text:
+            continue
+        history.append(
+            ChatMessage(
+                id=new_id(),
+                role=msg.role,
+                content=text,
+            )
+        )
+    return history
 
 
 def _extract_image_data(url: str) -> tuple[bytes, str] | None:
@@ -116,15 +182,17 @@ def _extract_user_input(req: OAIChatRequest) -> tuple[str, bytes | None, str | N
         if isinstance(msg.content, str):
             return msg.content, None, None
         text_parts: list[str] = []
+        image: tuple[bytes, str] | None = None
         for part in msg.content:
             if part.type == "text" and part.text:
                 text_parts.append(part.text)
-            if part.type == "image_url" and part.image_url:
+            if part.type == "image_url" and part.image_url and image is None:
                 url = part.image_url.url if isinstance(part.image_url, OAIImageURL) else part.image_url
                 image = _extract_image_data(url)
-                if image:
-                    return "\n".join(text_parts), image[0], image[1]
-        return "\n".join(text_parts), None, None
+        text = "\n".join(text_parts)
+        if image:
+            return text, image[0], image[1]
+        return text, None, None
     return "", None, None
 
 
@@ -215,12 +283,13 @@ async def chat_completions(
 ):
     """OpenAI-compatible chat completions endpoint."""
     user_message, image_data, image_content_type = _extract_user_input(req)
-    conversation_id = _extract_conversation_id(req) or new_id()
+    conversation_id = _extract_conversation_id(req) or _stable_conversation_id(req.messages)
+    prior_messages = _build_prior_messages(req.messages)
     request_id = f"chatcmpl-{new_id()}"
 
     logger.info(
-        "OAI-compat request | conv=%s | stream=%s | msg=%.80s",
-        conversation_id, req.stream, user_message,
+        "OAI-compat request | conv=%s | stream=%s | history=%d | msg=%.80s",
+        conversation_id, req.stream, len(prior_messages), user_message,
     )
 
     state = await agent.run(
@@ -228,6 +297,7 @@ async def chat_completions(
         user_message=user_message,
         image_data=image_data,
         image_content_type=image_content_type,
+        prior_messages=prior_messages,
     )
 
     content = _build_assistant_content(state, settings)

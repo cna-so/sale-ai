@@ -115,8 +115,8 @@ def make_generate_response_node(llm_service: LLMService, recommendation_service:
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
-        # Include last few history turns for context
-        for msg in history[-4:]:
+        # Include prior turns already limited by load_context / chat_history_limit
+        for msg in history:
             messages.append({"role": msg.role, "content": msg.content})
 
         user_content = user_message

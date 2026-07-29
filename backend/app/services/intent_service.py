@@ -22,10 +22,15 @@ class IntentService:
         if self._llm is not None:
             try:
                 system_prompt = INTENT_SYSTEM_PROMPT_FA if language == "fa" else INTENT_SYSTEM_PROMPT_EN
+                history = conversation_messages or []
+                history_block = ""
+                if history:
+                    clipped = history[-6:]
+                    history_block = "Recent conversation:\n" + "\n".join(f"- {item}" for item in clipped) + "\n\n"
                 content = await self._llm.chat(
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": message},
+                        {"role": "user", "content": f"{history_block}Current message:\n{message}"},
                     ],
                     temperature=0.0,
                     response_format={"type": "json_object"},

@@ -24,8 +24,9 @@ class AgentState(TypedDict, total=False):
     image_data: bytes | None
     image_content_type: str | None
 
-    # Context loaded from repository
+    # Context loaded from repository / OpenAI client thread
     history: list[ChatMessage]
+    client_history: list[ChatMessage]
     preferences: UserPreferences
 
     # Intent

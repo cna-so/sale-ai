@@ -15,13 +15,18 @@ def make_load_context_node(repository: ConversationRepository, settings: Setting
         conversation_id = state["conversation_id"]
         conv = await repository.get_or_create(conversation_id)
         limit = settings.chat_history_limit
-        history = conv.messages[-limit:] if conv.messages else []
+        repo_history = conv.messages[-limit:] if conv.messages else []
+        # LibreChat / OpenAI clients already send the thread; prefer that for continuity.
+        client_history = state.get("client_history") or []
+        history = (client_history or repo_history)[-limit:]
+
         last_products: list[Product] = []
         last_image_analysis = None
-        for message in reversed(history):
+        # Prefer metadata from our persisted assistant turns; fall back to client history.
+        for message in reversed([*repo_history, *client_history]):
             if message.role != "assistant":
                 continue
-            metadata = message.metadata
+            metadata = message.metadata or {}
             if not last_products:
                 try:
                     last_products = [
@@ -37,7 +42,13 @@ def make_load_context_node(repository: ConversationRepository, settings: Setting
                     logger.warning("Skipping invalid persisted image context")
             if last_products and last_image_analysis is not None:
                 break
-        logger.debug("Loaded %d messages for conversation %s", len(history), conversation_id)
+        logger.info(
+            "Loaded %d history messages for conversation %s (client=%d repo=%d)",
+            len(history),
+            conversation_id,
+            len(client_history),
+            len(repo_history),
+        )
         return {
             **state,
             "history": history,
