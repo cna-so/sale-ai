@@ -15,10 +15,12 @@ This adapter:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
 from typing import AsyncIterator
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -39,9 +41,19 @@ MODEL_ID = "sale-ai"
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
+class OAIImageURL(BaseModel):
+    url: str
+
+
+class OAIContentPart(BaseModel):
+    type: str
+    text: str | None = None
+    image_url: OAIImageURL | str | None = None
+
+
 class OAIMessage(BaseModel):
     role: str
-    content: str | None = None
+    content: str | list[OAIContentPart] | None = None
 
 
 class OAIChatRequest(BaseModel):
@@ -82,10 +94,11 @@ def _widget_to_markdown(widget: dict) -> str:
         return "\n".join(parts)
 
     if wtype == "product_card":
-        name = data.get("name", "")
-        price = data.get("price", "")
-        rating = data.get("rating", "")
-        url = data.get("url", "")
+        product = data.get("product", data)
+        name = product.get("title_en") or product.get("title", "")
+        price = product.get("price", "")
+        rating = product.get("rating", "")
+        url = product.get("product_url", "")
         lines = [f"**{name}**"]
         if price:
             lines.append(f"- قیمت: {price}")
@@ -94,6 +107,20 @@ def _widget_to_markdown(widget: dict) -> str:
         if url:
             lines.append(f"- [مشاهده محصول]({url})")
         return "\n".join(lines)
+
+    if wtype == "product_carousel":
+        title = data.get("title", "")
+        product_lines = []
+        for product in data.get("products", []):
+            name = product.get("title_en") or product.get("title", "")
+            price = product.get("price", "")
+            url = product.get("product_url", "")
+            product_lines.append(
+                f"- **{name}**"
+                + (f" — {price:,} toman" if isinstance(price, int) else "")
+                + (f" ([view]({url}))" if url else "")
+            )
+        return "\n".join(([f"**{title}**"] if title else []) + product_lines)
 
     if wtype == "text":
         return data.get("content", "")
@@ -113,9 +140,9 @@ def _build_content(answer: str, widgets: list, products: list) -> str:
 
     for p in products or []:
         p_dict = p if isinstance(p, dict) else p.model_dump()
-        name = p_dict.get("name", "")
+        name = p_dict.get("title_en") or p_dict.get("title", "")
         price = p_dict.get("price", "")
-        url = p_dict.get("url", "")
+        url = p_dict.get("product_url", "")
         line = f"- **{name}**" + (f" — {price}" if price else "") + (f" ([link]({url}))" if url else "")
         parts.append(line)
 
@@ -148,12 +175,47 @@ def _extract_conversation_id(req: OAIChatRequest) -> str | None:
     return None
 
 
-def _extract_user_message(req: OAIChatRequest) -> str:
-    """Return the last user message content."""
+def _extract_image_data(url: str) -> tuple[bytes, str] | None:
+    """Decode OpenAI data URLs or a LibreChat image mounted into this container."""
+    if url.startswith("data:image/"):
+        header, _, encoded = url.partition(",")
+        if not encoded or ";base64" not in header:
+            return None
+        content_type = header.removeprefix("data:").split(";", 1)[0]
+        try:
+            return base64.b64decode(encoded, validate=True), content_type
+        except ValueError:
+            return None
+
+    parsed = urlparse(url)
+    if parsed.path.startswith("/images/"):
+        from pathlib import Path
+
+        image_path = Path("/librechat_uploads") / Path(parsed.path).name
+        if image_path.is_file():
+            content_type = "image/" + (image_path.suffix.removeprefix(".") or "jpeg")
+            return image_path.read_bytes(), content_type
+    return None
+
+
+def _extract_user_input(req: OAIChatRequest) -> tuple[str, bytes | None, str | None]:
+    """Return the last user text and an optional OpenAI-compatible image."""
     for msg in reversed(req.messages):
-        if msg.role == "user" and msg.content:
-            return msg.content
-    return ""
+        if msg.role != "user" or not msg.content:
+            continue
+        if isinstance(msg.content, str):
+            return msg.content, None, None
+        text_parts: list[str] = []
+        for part in msg.content:
+            if part.type == "text" and part.text:
+                text_parts.append(part.text)
+            if part.type == "image_url" and part.image_url:
+                url = part.image_url.url if isinstance(part.image_url, OAIImageURL) else part.image_url
+                image = _extract_image_data(url)
+                if image:
+                    return "\n".join(text_parts), image[0], image[1]
+        return "\n".join(text_parts), None, None
+    return "", None, None
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +277,7 @@ async def chat_completions(
     agent: ShoppingAgent = Depends(get_shopping_agent),
 ):
     """OpenAI-compatible chat completions endpoint."""
-    user_message = _extract_user_message(req)
+    user_message, image_data, image_content_type = _extract_user_input(req)
     conversation_id = _extract_conversation_id(req) or new_id()
     request_id = f"chatcmpl-{new_id()}"
 
@@ -228,6 +290,8 @@ async def chat_completions(
     state = await agent.run(
         conversation_id=conversation_id,
         user_message=user_message,
+        image_data=image_data,
+        image_content_type=image_content_type,
     )
 
     content = _build_content(

@@ -21,6 +21,8 @@ services:
     # Inherits build context from base docker-compose.yml
     networks:
       - sale-ai-net
+    volumes:
+      - librechat_uploads:/librechat_uploads:ro
 
   qdrant:
     networks:
