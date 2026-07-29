@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.routers import chat, documents, health, history
+from backend.app.api.routers.openai_compat import router as openai_compat_router
 from backend.app.core.config import get_settings
 from backend.app.core.exceptions import AppError, app_error_handler, generic_error_handler
 from backend.app.core.logging import configure_logging
@@ -50,3 +51,6 @@ app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(documents.router)
 app.include_router(history.router)
+
+# OpenAI-compatible adapter for LibreChat and any OpenAI-spec client
+app.include_router(openai_compat_router)

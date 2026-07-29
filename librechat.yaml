@@ -1,0 +1,43 @@
+# LibreChat configuration for sale-ai integration
+# Docs: https://www.librechat.ai/docs/configuration/librechat_yaml
+#
+# Usage:
+#   1. Place this file next to your LibreChat docker-compose.yml
+#   2. Mount it:  volumes: - ./librechat.yaml:/app/librechat.yaml
+#   3. Set in LibreChat .env:  CONFIG_PATH=/app/librechat.yaml
+
+version: 1.2.1
+cache: true
+
+endpoints:
+  custom:
+    - name: "Digikala Assistant"
+      # sale-ai does not validate API keys; any non-empty string works.
+      # If you add auth middleware later, put the real key here or use
+      # a LibreChat user_provided key instead.
+      apiKey: "sale-ai-local"
+
+      # When running via docker-compose.librechat.yml both services share
+      # the 'sale-ai-net' network, so use the service name directly.
+      # For a standalone LibreChat instance on the same host, use:
+      #   baseURL: "http://host.docker.internal:8000"
+      baseURL: "http://sale-ai-api:8000"
+
+      models:
+        default: ["sale-ai"]
+        # Set to true if you add more models behind the same endpoint later
+        fetch: false
+
+      titleConvo: true
+      titleModel: "sale-ai"
+      modelDisplayLabel: "🛒 دیجی‌کالا AI"
+
+      # sale-ai already maintains its own conversation history internally;
+      # disable LibreChat's summarisation to avoid double-processing.
+      summarize: false
+
+      # Stream tokens as they arrive (sale-ai adapter supports SSE)
+      streaming: true
+
+      # Allow users to pick the endpoint without an API key prompt
+      userProvide: false
