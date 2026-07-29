@@ -101,8 +101,8 @@ data/
 cp .env.example .env
 # Edit .env and set at minimum:
 # OPENROUTER_API_KEY=sk-or-...
-# OPENROUTER_CHAT_MODEL=openai/gpt-4o-mini
-# OPENROUTER_VISION_MODEL=openai/gpt-4o
+# OPENROUTER_CHAT_MODEL=google/gemini-2.5-flash-lite
+# OPENROUTER_VISION_MODEL=google/gemini-2.5-flash-lite
 # OPENROUTER_EMBEDDING_MODEL=openai/text-embedding-3-small
 # PRODUCT_PROVIDER=mock    # use 'digikala' for real scraping
 ```

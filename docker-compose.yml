@@ -16,8 +16,7 @@ services:
       - ./backend:/app/backend
       - ./data:/app/data
     depends_on:
-      qdrant:
-        condition: service_healthy
+      - qdrant
     restart: unless-stopped
     stop_grace_period: 10s
 
