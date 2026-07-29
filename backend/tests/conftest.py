@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app.core.config import Settings
+from backend.app.core.config import Settings, get_settings
 from backend.app.main import app
 from backend.app.api.dependencies import (
     get_conversation_repository,
