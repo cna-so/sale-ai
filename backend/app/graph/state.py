@@ -10,6 +10,7 @@ from backend.app.models.domain import (
     RetrievedDocument,
     UserPreferences,
 )
+from backend.app.schemas.react import ReActDecision, ReActStep
 
 
 class AgentState(TypedDict, total=False):
@@ -34,6 +35,11 @@ class AgentState(TypedDict, total=False):
     retrieved_docs: list[RetrievedDocument]
     products: list[Product]
     image_analysis: ImageAnalysisResult | None
+
+    # ReAct controller state (internal-only; never returned to API clients)
+    react_decision: ReActDecision | None
+    react_iteration: int
+    react_steps: list[ReActStep]
 
     # Final output
     answer: str

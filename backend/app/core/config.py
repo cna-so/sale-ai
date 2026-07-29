@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # Conversation
     chat_history_limit: int = 12
 
+    # ReAct controller
+    react_max_iterations: int = Field(default=3, ge=1, le=8)
+
     # Locale
     default_locale: str = "fa-IR"
     default_currency: str = "IRR"

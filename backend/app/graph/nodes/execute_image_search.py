@@ -4,6 +4,7 @@ import logging
 
 from backend.app.core.exceptions import ImageProcessingError
 from backend.app.graph.state import AgentState
+from backend.app.graph.nodes.react_controller import add_react_observation
 from backend.app.tools.image_understanding import ImageUnderstandingTool
 from backend.app.tools.product_search import ProductSearchTool
 
@@ -14,7 +15,11 @@ def make_execute_image_search_node(image_tool: ImageUnderstandingTool, product_t
     async def execute_image_search(state: AgentState) -> AgentState:
         image_data = state.get("image_data")
         content_type = state.get("image_content_type", "image/jpeg")
-        instruction = state.get("user_message") or None
+        decision = state.get("react_decision")
+        instruction = (
+            decision.action_input if decision and decision.action_input
+            else state.get("user_message") or None
+        )
         locale = state.get("locale", "fa-IR")
 
         image_analysis = None
@@ -44,6 +49,10 @@ def make_execute_image_search_node(image_tool: ImageUnderstandingTool, product_t
             "products": products,
             "used_image_analysis": True,
             "used_product_search": len(products) > 0,
+            "react_steps": add_react_observation(
+                state,
+                f"Analyzed image and found {len(products)} product(s).",
+            ),
         }
 
     return execute_image_search
