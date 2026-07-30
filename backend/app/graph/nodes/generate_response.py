@@ -106,6 +106,17 @@ def make_generate_response_node(llm_service: LLMService, recommendation_service:
         if products:
             label = "\u0645\u062d\u0635\u0648\u0644\u0627\u062a \u06cc\u0627\u0641\u062a \u0634\u062f\u0647" if language == "fa" else "Found products"
             context_parts.append(f"{label}:\n" + _build_product_context(products, language))
+        elif state.get("error") and state.get("used_product_search"):
+            if language == "fa":
+                context_parts.append(
+                    f"جستجوی دیجی\u200cکالا ناموفق بود: {state['error']}. "
+                    "به کاربر بگو محصولی از دیجی\u200cکالا دریافت نشد و دوباره تلاش کند."
+                )
+            else:
+                context_parts.append(
+                    f"Digikala search failed: {state['error']}. "
+                    "Tell the user no live Digikala products were retrieved and suggest retrying."
+                )
         if recommendation_reasons:
             label = "\u062f\u0644\u0627\u06cc\u0644 \u0627\u0646\u062a\u062e\u0627\u0628" if language == "fa" else "Recommendation fit"
             context_parts.append(f"{label}:\n" + "\n".join(recommendation_reasons))

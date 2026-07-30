@@ -27,8 +27,25 @@ async def test_mock_provider_product_fields():
 @pytest.mark.asyncio
 async def test_mock_provider_max_results():
     provider = MockProductProvider()
-    result = await provider.search("test", max_results=2)
+    result = await provider.search("keyboard", max_results=2)
     assert len(result.products) <= 2
+
+
+@pytest.mark.asyncio
+async def test_mock_provider_different_queries_return_different_products():
+    provider = MockProductProvider()
+    keyboards = await provider.search("keyboard")
+    phones = await provider.search("گوشی")
+    assert keyboards.products
+    assert phones.products
+    assert keyboards.products[0].id != phones.products[0].id
+
+
+@pytest.mark.asyncio
+async def test_mock_provider_no_match_returns_empty():
+    provider = MockProductProvider()
+    result = await provider.search("hello random xyz")
+    assert result.products == []
 
 
 @pytest.mark.asyncio

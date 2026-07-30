@@ -22,6 +22,11 @@ async def health_check(settings: Settings = Depends(get_settings)):
         "env": settings.app_env,
         "llm_configured": settings.is_openrouter_configured,
         "product_provider": settings.product_provider,
+        "product_data_source": (
+            "digikala.com live search"
+            if settings.product_provider == "digikala"
+            else "local mock catalog"
+        ),
         "qdrant": "healthy" if qdrant_ok else "unreachable",
         "models": {
             "chat": settings.openrouter_chat_model,

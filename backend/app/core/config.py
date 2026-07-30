@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     qdrant_collection: str = "shopping_assistant_documents"
 
     # Product provider
-    product_provider: Literal["mock", "digikala"] = "mock"
+    product_provider: Literal["mock", "digikala"] = "digikala"
     product_search_timeout_seconds: int = 20
 
     # File uploads

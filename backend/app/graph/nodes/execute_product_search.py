@@ -9,6 +9,33 @@ from backend.app.tools.product_search import ProductSearchTool
 logger = logging.getLogger(__name__)
 
 
+def _should_reuse_prior_products(intent, user_message: str) -> bool:
+    """Only reuse cached products for true follow-ups, not new searches."""
+    if intent is None:
+        return False
+    if intent.intent == "follow_up":
+        return True
+    if intent.intent != "product_detail":
+        return False
+    normalized = user_message.lower()
+    reference_markers = (
+        "اول",
+        "دوم",
+        "سوم",
+        "همون",
+        "همین",
+        "این",
+        "اون",
+        "first",
+        "second",
+        "third",
+        "this one",
+        "that one",
+        "the one",
+    )
+    return any(marker in normalized for marker in reference_markers)
+
+
 def make_execute_product_search_node(product_tool: ProductSearchTool):
     async def execute_product_search(state: AgentState) -> AgentState:
         intent = state.get("intent")
@@ -19,11 +46,10 @@ def make_execute_product_search_node(product_tool: ProductSearchTool):
             else (intent.search_query if intent else None) or state["user_message"]
         )
 
-        reuse_prior_products = bool(prior_products) and intent and intent.intent in {
-            "follow_up",
-            "product_comparison",
-            "product_detail",
-        }
+        reuse_prior_products = bool(prior_products) and _should_reuse_prior_products(
+            intent, state["user_message"]
+        )
+        search_error: str | None = None
         if reuse_prior_products:
             products = prior_products
             price = intent.filters.price
@@ -36,17 +62,27 @@ def make_execute_product_search_node(product_tool: ProductSearchTool):
                 query = state["last_image_analysis"].suggested_search_query
             try:
                 result = await product_tool.run(query=query, max_results=5)
-                products = result.data.products if result.success and result.data else []
+                if result.success and result.data:
+                    products = result.data.products
+                    search_error = result.data.error
+                else:
+                    products = []
+                    search_error = result.error
             except Exception as exc:
                 logger.warning("Product search failed: %s", exc)
                 products = []
+                search_error = str(exc)
 
         logger.debug("Product search returned %d products", len(products))
+        observation = f"Found {len(products)} product(s)."
+        if search_error:
+            observation += f" Error: {search_error}"
         return {
             **state,
             "products": products,
             "used_product_search": True,
-            "react_steps": add_react_observation(state, f"Found {len(products)} product(s)."),
+            "error": search_error or state.get("error"),
+            "react_steps": add_react_observation(state, observation),
         }
 
     return execute_product_search

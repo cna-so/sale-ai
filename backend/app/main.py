@@ -12,6 +12,7 @@ from backend.app.api.routers.openai_compat import router as openai_compat_router
 from backend.app.core.config import get_settings
 from backend.app.core.exceptions import AppError, app_error_handler, generic_error_handler
 from backend.app.core.logging import configure_logging
+from backend.app.utils.playwright_health import check_playwright_chromium
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -23,6 +24,12 @@ async def lifespan(app: FastAPI):
     logger.info("AI Shopping Assistant starting (env=%s)", settings.app_env)
     logger.info("Product provider: %s", settings.product_provider)
     logger.info("LLM configured: %s", settings.is_openrouter_configured)
+    if settings.product_provider == "digikala":
+        ready, err = await check_playwright_chromium()
+        if ready:
+            logger.info("Digikala provider: Playwright Chromium ready")
+        else:
+            logger.warning("Digikala provider: Playwright Chromium unavailable — %s", err)
     Path("data/uploads").mkdir(parents=True, exist_ok=True)
     Path("data/documents").mkdir(parents=True, exist_ok=True)
     yield
