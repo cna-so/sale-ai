@@ -23,14 +23,15 @@ This project is **not** a production Digikala clone. It is a reference implement
 FastAPI Routers
   └── ShoppingAgent
         └── LangGraph (compiled StateGraph)
-              ├── load_context      (conversation repo)
-              ├── detect_intent     (LLM or keyword fallback)
-              ├── route_request     (conditional edge)
-              ├── execute_rag       (Qdrant retrieval)
-              ├── execute_product_search  (provider)
-              ├── execute_image_search    (vision LLM + search)
-              ├── generate_response (LLM synthesis)
-              └── save_conversation (in-memory repo)
+              ├── load_context           (conversation repo)
+              ├── detect_intent          (LLM or keyword fallback)
+              ├── route_by_intent        (conditional edge)
+              ├── react_controller       (bounded ReAct loop — tool selection)
+              ├── execute_rag            (Qdrant retrieval)
+              ├── execute_product_search (provider)
+              ├── execute_image_search   (vision LLM + search)
+              ├── generate_response      (LLM synthesis)
+              └── save_conversation      (in-memory repo)
 
 Infrastructure
   ├── OpenRouter  — chat, vision, embeddings
@@ -47,12 +48,14 @@ graph TD
     A([User Input]) --> B[load_context]
     B --> C[detect_intent]
     C -->|general_chat| G[generate_response]
-    C -->|rag_query| D[execute_rag]
-    C -->|product_search / recommendation / follow_up| E[execute_product_search]
-    C -->|image_search| F[execute_image_search]
-    D --> G
-    E --> G
-    F --> G
+    C -->|tool-eligible intents| R[react_controller]
+    R -->|rag_search| D[execute_rag]
+    R -->|product_search| E[execute_product_search]
+    R -->|image_search| F[execute_image_search]
+    R -->|enough context| G
+    D --> R
+    E --> R
+    F --> R
     G --> H[save_conversation]
     H --> I([END])
 ```
